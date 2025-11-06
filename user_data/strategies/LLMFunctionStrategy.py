@@ -533,65 +533,82 @@ class LLMFunctionStrategy(IStrategy):
         **kwargs
     ) -> Optional[float]:
         """
-        动态止损 - 由LLM完全控制
+        固定止损 - 由LLM完全控制，止损价格固定不变
 
-        重要说明：
-        - current_profit 是当前仓位的盈亏百分比(已考虑杠杆)
-        - 返回值是相对于当前价格的止损距离(负数)
-        - 当 current_profit <= 返回值 时触发止损
+        核心逻辑：
+        1. LLM设置账户止损（如-10.95%），基于开仓价计算出固定止损触发价
+        2. 将固定价格动态转换为相对于当前价的百分比返回给Freqtrade
+        3. 确保无论价格如何变化，止损触发价始终不变
 
-        示例：
-        - AI设置: -20%账户止损
-        - current_profit = -0.20 时触发
-        - 直接返回 -0.20 即可
+        数学推导：
+        - 做空：fixed_stop = current_rate / (1 - returned_value)
+          → returned_value = 1 - current_rate / fixed_stop
+        - 做多：fixed_stop = current_rate * (1 + returned_value)
+          → returned_value = fixed_stop / current_rate - 1
         """
-        logger.debug(f"custom_stoploss被调用: {pair}, profit={current_profit*100:.2f}%, cache={pair in self._stoploss_cache}")
 
-        # 检查缓存中是否有LLM设置的止损
-        if pair in self._stoploss_cache:
-            # LLM设置的账户止损百分比（例如 -20 表示账户亏损20%）
-            stoploss_pct = self._stoploss_cache[pair]
+        # 检查LLM是否设置了止损
+        if pair not in self._stoploss_cache:
+            return -0.10
 
-            # 转换为小数形式（-20 -> -0.20）
-            stoploss_value = stoploss_pct / 100
+        # 获取LLM设置的账户止损百分比（如 -10.95）
+        account_stoploss_pct = self._stoploss_cache[pair]
 
-            # 获取杠杆和开仓价用于日志
-            leverage = getattr(trade, 'leverage', 1)
-            open_rate = trade.open_rate
+        # 获取交易基本信息
+        open_rate = trade.open_rate
+        leverage = getattr(trade, 'leverage', 1)
+        is_short = trade.is_short
 
-            # 计算触发止损时的价格（用于日志显示）
-            # current_profit = (current_rate - open_rate) / open_rate * leverage (做多)
-            # current_profit = (open_rate - current_rate) / open_rate * leverage (做空)
-            # 反推: price_change = stoploss_value / leverage
-            price_change_pct = stoploss_value / leverage
+        # 计算价格容错空间（账户止损 = 价格容错 × 杠杆）
+        price_tolerance_pct = account_stoploss_pct / leverage
 
-            if trade.is_short:
-                # 做空：价格上涨触发止损
-                stoploss_price = open_rate * (1 - price_change_pct)
+        # 计算固定的止损触发价格（基于开仓价，计算一次后永不改变）
+        if is_short:
+            # 做空：止损在开仓价上方
+            fixed_stop_price = open_rate * (1 - price_tolerance_pct / 100)
+        else:
+            # 做多：止损在开仓价下方
+            fixed_stop_price = open_rate * (1 + price_tolerance_pct / 100)
+
+        # 关键转换：将固定止损价转换为Freqtrade期望的相对百分比
+        if is_short:
+            # 做空公式：stop = current_rate / (1 - stoploss_value)
+            # 反推：stoploss_value = 1 - current_rate / fixed_stop_price
+            if fixed_stop_price > 0:
+                relative_stoploss = 1 - current_rate / fixed_stop_price
             else:
-                # 做多：价格下跌触发止损
-                stoploss_price = open_rate * (1 + price_change_pct)
+                logger.error(f"❌ {pair} 止损价格异常: {fixed_stop_price}")
+                return -0.10
+        else:
+            # 做多公式：stop = current_rate * (1 + stoploss_value)
+            # 反推：stoploss_value = fixed_stop_price / current_rate - 1
+            if current_rate > 0:
+                relative_stoploss = fixed_stop_price / current_rate - 1
+            else:
+                logger.error(f"❌ {pair} 当前价格异常: {current_rate}")
+                return -0.10
 
-            # 止损信息记录到 debug 级别
-            logger.debug(f"止损: {pair} {stoploss_pct}% @ {stoploss_price:.2f} (杠杆{leverage}x)")
-            logger.debug(f"  开仓价: {open_rate:.2f}, 当前价: {current_rate:.2f}, 当前盈亏: {current_profit*100:.2f}%")
-            logger.debug(f"  方向: {'做空' if trade.is_short else '做多'}, 触发条件: 盈亏 <= {stoploss_value*100:.2f}%")
-            
-            # 安全检查：确保止损值在合理范围内
-            if stoploss_value > 0:
-                logger.error(f"❌ {pair} 止损值异常: {stoploss_value} 应该是负数!")
-                return -0.10  # 返回保守的10%止损
-            
-            if stoploss_value < -0.99:
-                logger.warning(f"⚠️ {pair} 止损值过大: {stoploss_value}, 限制为-99%")
-                return -0.99
-            
-            return stoploss_value
-        
-        # 如果没有LLM设置的止损，使用保守的默认值
-        default_stoploss = -0.10  # 默认账户亏损10%时止损
-        logger.debug(f"{pair} 使用默认止损: {default_stoploss*100:.2f}%")
-        return default_stoploss
+        # 安全限制：确保返回值在合理范围内
+        if relative_stoploss > 0:
+            relative_stoploss = 0
+        elif relative_stoploss < -0.99:
+            logger.warning(f"⚠️ {pair} 止损值超限: {relative_stoploss:.4f}, 限制为-0.99")
+            relative_stoploss = -0.99
+
+        # 验证计算（仅在出错时记录）
+        if is_short:
+            verify_stop = current_rate / (1 - relative_stoploss) if relative_stoploss != 1 else float('inf')
+        else:
+            verify_stop = current_rate * (1 + relative_stoploss)
+
+        error = abs(verify_stop - fixed_stop_price)
+        if error > 0.01:  # 误差超过1分钱才报错
+            logger.error(
+                f"❌ {pair} 止损计算验证失败: "
+                f"期望{fixed_stop_price:.2f}, 实际{verify_stop:.2f}, 误差{error:.4f}"
+            )
+
+        return relative_stoploss
 
     def custom_stake_amount(
         self,
