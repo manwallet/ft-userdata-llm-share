@@ -1,0 +1,15 @@
+# 基于官方freqtrade镜像
+FROM freqtradeorg/freqtrade:stable
+
+# 切换到root用户安装依赖
+USER root
+
+# 安装额外的Python依赖
+RUN pip install --no-cache-dir \
+    chromadb>=0.4.22 \
+    requests>=2.31.0
+
+# 切换回freqtrade用户
+USER ftuser
+
+# 保持原有的启动命令

@@ -1,0 +1,171 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 4,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "dry_run": true,
+    "dry_run_wallet": 1340,
+    "cancel_open_orders_on_exit": false,
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "unfilledtimeout": {
+        "entry": 5,
+        "exit": 5,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1
+    },
+    "order_types": {
+        "entry": "limit",
+        "exit": "market",
+        "emergency_exit": "market",
+        "force_exit": "market",
+        "force_entry": "market",
+        "stoploss": "market",
+        "stoploss_on_exchange": false
+    },
+    "trailing_stop": false,
+    "exchange": {
+        "name": "binance",
+        "key": "",
+        "secret": "",
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "options": {
+                "defaultType": "future"
+            }
+        },
+        "ccxt_async_config": {
+            "enableRateLimit": true,
+            "rateLimit": 200,
+            "timeout": 30000
+        },
+        "pair_whitelist": [],
+        "pair_blacklist": []
+    },
+    "pairlists": [
+        {
+            "method": "VolumePairList",
+            "number_assets": 5,
+            "sort_key": "quoteVolume",
+            "min_value": 0,
+            "refresh_period": 900
+        },
+        {
+            "method": "AgeFilter",
+            "min_days_listed": 3
+        }
+    ],
+    "telegram": {
+        "enabled": true,
+        "token": "",
+        "chat_id": ""
+    },
+    "discord": {
+        "enabled": true,
+        "webhook_url": "",
+        "allow_custom_messages": true,
+        "exit_fill": [
+            {"Trade ID": "{trade_id}"},
+            {"Exchange": "{exchange}"},
+            {"Pair": "{pair}"},
+            {"Direction": "{direction}"},
+            {"Open rate": "{open_rate}"},
+            {"Close rate": "{close_rate}"},
+            {"Amount": "{amount}"},
+            {"Open date": "{open_date:%Y-%m-%d %H:%M:%S}"},
+            {"Close date": "{close_date:%Y-%m-%d %H:%M:%S}"},
+            {"Profit": "{profit_amount} {stake_currency}"},
+            {"Profitability": "{profit_ratio:.2%}"},
+            {"Enter tag": "{enter_tag}"},
+            {"Exit Reason": "{exit_reason}"},
+            {"Strategy": "{strategy}"},
+            {"Timeframe": "{timeframe}"}
+        ],
+        "entry_fill": [
+            {"Trade ID": "{trade_id}"},
+            {"Exchange": "{exchange}"},
+            {"Pair": "{pair}"},
+            {"Direction": "{direction}"},
+            {"Open rate": "{open_rate}"},
+            {"Amount": "{amount}"},
+            {"Open date": "{open_date:%Y-%m-%d %H:%M:%S}"},
+            {"Enter tag": "{enter_tag}"},
+            {"Strategy": "{strategy} {timeframe}"}
+        ]
+    },
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "0.0.0.0",
+        "listen_port": 8080,
+        "verbosity": "error",
+        "enable_openapi": true,
+        "jwt_secret_key": "",
+        "ws_token": "",
+        "CORS_origins": [],
+        "username": "",
+        "password": ""
+    },
+    "strategy": "LLMFunctionStrategy",
+    "bot_name": "LLM-Function-Strategy-v1",
+    "initial_state": "running",
+    "force_entry_enable": true,
+    "position_adjustment_enable": true,
+    "max_entry_position_adjustment": 10,
+    "process_only_new_candles": true,
+    "internals": {
+        "process_throttle_secs": 3
+    },
+    "llm_config": {
+        "api_base": "",
+        "api_key": "",
+        "model": "",
+        "embedding_model": ""
+    },
+    "rag_config": {
+        "enable": true,
+        "vector_db": "chromadb",
+        "similarity_top_k": 5,
+        "min_similarity": 0.7,
+        "storage_path": "./user_data/data/vector_store",
+        "max_history_size": 10000,
+        "cleanup_days": 30
+    },
+    "risk_management": {
+        "max_leverage": 100,
+        "default_leverage": 10,
+        "max_position_pct": 50,
+        "max_open_trades": 4,
+        "allow_model_freedom": true,
+        "emergency_stop_loss": -0.15
+    },
+    "experience_config": {
+        "log_decisions": true,
+        "log_trades": true,
+        "decision_log_path": "./user_data/logs/llm_decisions.jsonl",
+        "trade_log_path": "./user_data/logs/trade_experience.jsonl"
+    },
+    "context_config": {
+        "max_context_tokens": 6000,
+        "system_prompt_tokens": 500,
+        "market_data_tokens": 800,
+        "rag_history_tokens": 1500,
+        "enable_context_compression": true
+    }
+}
