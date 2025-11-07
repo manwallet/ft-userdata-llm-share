@@ -565,10 +565,18 @@ class LLMFunctionStrategy(IStrategy):
         # 计算固定的止损触发价格（基于开仓价，计算一次后永不改变）
         if is_short:
             # 做空：止损在开仓价上方
+            # price_tolerance_pct 是负数，如 -10，所以 1 - (-10)/100 = 1.10
             fixed_stop_price = open_rate * (1 - price_tolerance_pct / 100)
         else:
             # 做多：止损在开仓价下方
+            # price_tolerance_pct 是负数，如 -10，所以 1 + (-10)/100 = 0.90
             fixed_stop_price = open_rate * (1 + price_tolerance_pct / 100)
+
+        logger.debug(
+            f"{pair} 止损计算 | 方向: {'空' if is_short else '多'} | "
+            f"开仓价: {open_rate:.2f} | 固定止损价: {fixed_stop_price:.2f} | "
+            f"当前价: {current_rate:.2f} | 账户止损: {account_stoploss_pct:.2f}% | 杠杆: {leverage}x"
+        )
 
         # 关键转换：将固定止损价转换为Freqtrade期望的相对百分比
         if is_short:
@@ -576,6 +584,9 @@ class LLMFunctionStrategy(IStrategy):
             # 反推：stoploss_value = 1 - current_rate / fixed_stop_price
             if fixed_stop_price > 0:
                 relative_stoploss = 1 - current_rate / fixed_stop_price
+                logger.debug(
+                    f"{pair} 做空转换: 1 - {current_rate:.2f}/{fixed_stop_price:.2f} = {relative_stoploss:.4f}"
+                )
             else:
                 logger.error(f"❌ {pair} 止损价格异常: {fixed_stop_price}")
                 return -0.10
@@ -584,18 +595,14 @@ class LLMFunctionStrategy(IStrategy):
             # 反推：stoploss_value = fixed_stop_price / current_rate - 1
             if current_rate > 0:
                 relative_stoploss = fixed_stop_price / current_rate - 1
+                logger.debug(
+                    f"{pair} 做多转换: {fixed_stop_price:.2f}/{current_rate:.2f} - 1 = {relative_stoploss:.4f}"
+                )
             else:
                 logger.error(f"❌ {pair} 当前价格异常: {current_rate}")
                 return -0.10
 
-        # 安全限制：确保返回值在合理范围内
-        if relative_stoploss > 0:
-            relative_stoploss = 0
-        elif relative_stoploss < -0.99:
-            logger.warning(f"⚠️ {pair} 止损值超限: {relative_stoploss:.4f}, 限制为-0.99")
-            relative_stoploss = -0.99
-
-        # 验证计算（仅在出错时记录）
+        # 验证计算（在安全限制之前验证原始值）
         if is_short:
             verify_stop = current_rate / (1 - relative_stoploss) if relative_stoploss != 1 else float('inf')
         else:
@@ -607,6 +614,18 @@ class LLMFunctionStrategy(IStrategy):
                 f"❌ {pair} 止损计算验证失败: "
                 f"期望{fixed_stop_price:.2f}, 实际{verify_stop:.2f}, 误差{error:.4f}"
             )
+            logger.debug(
+                f"   开仓价: {open_rate:.2f}, 当前价: {current_rate:.2f}, "
+                f"相对止损: {relative_stoploss:.4f}, 杠杆: {leverage}x"
+            )
+
+        # 安全限制：确保返回值在合理范围内
+        if relative_stoploss > 0:
+            logger.debug(f"{pair} 止损值为正 {relative_stoploss:.4f}，限制为0（当前价已低于固定止损价）")
+            relative_stoploss = 0
+        elif relative_stoploss < -0.99:
+            logger.warning(f"⚠️ {pair} 止损值超限: {relative_stoploss:.4f}, 限制为-0.99")
+            relative_stoploss = -0.99
 
         return relative_stoploss
 
