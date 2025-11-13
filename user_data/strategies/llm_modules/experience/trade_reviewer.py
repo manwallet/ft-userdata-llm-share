@@ -297,7 +297,7 @@ class TradeReviewer:
         warnings: List[str]
     ) -> str:
         """
-        生成简洁的经验教训总结（用于RAG存储）
+        生成简洁的经验教训总结
         """
         parts = []
 

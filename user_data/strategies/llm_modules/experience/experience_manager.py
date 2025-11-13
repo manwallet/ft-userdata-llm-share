@@ -1,7 +1,6 @@
 """
 经验管理器模块
 管理交易经验的存储、分析和学习
-集成 RAG 系统进行语义检索和学习
 """
 import logging
 from typing import Dict, Any, List, Optional
@@ -12,28 +11,40 @@ logger = logging.getLogger(__name__)
 
 
 class ExperienceManager:
-    """经验学习管理器（集成RAG）"""
+    """经验学习管理器"""
 
-    def __init__(self, trade_logger, rag_manager=None):
+    def __init__(self, trade_logger, self_reflection_engine=None, trade_evaluator=None, reward_learning=None):
         """
         初始化经验管理器
 
         Args:
             trade_logger: 交易日志记录器
-            rag_manager: RAG管理器（可选）
+            self_reflection_engine: 自我反思引擎（可选）
+            trade_evaluator: 交易评价器（可选）
+            reward_learning: 奖励学习系统（可选）
         """
         self.trade_logger = trade_logger
-        self.rag_manager = rag_manager
+        self.reflection_engine = self_reflection_engine
+        self.trade_evaluator = trade_evaluator
+        self.reward_learning = reward_learning
 
         # 内存缓存
         self._pair_performance: Dict[str, Dict[str, Any]] = defaultdict(dict)
         self._recent_mistakes: List[Dict[str, Any]] = []
         self._success_patterns: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
-        if self.rag_manager:
-            logger.info("经验管理器已初始化（RAG模式）")
+        components = []
+        if self.reflection_engine:
+            components.append("自我反思")
+        if self.trade_evaluator:
+            components.append("交易评价")
+        if self.reward_learning:
+            components.append("奖励学习")
+
+        if components:
+            logger.info(f"经验管理器已初始化（启用: {', '.join(components)}）")
         else:
-            logger.info("经验管理器已初始化（传统模式）")
+            logger.info("经验管理器已初始化")
 
     def log_decision_with_context(
         self,
@@ -46,7 +57,7 @@ class ExperienceManager:
         function_calls: List[Dict[str, Any]]
     ):
         """
-        记录决策并存储到RAG系统
+        记录决策到日志
 
         Args:
             pair: 交易对
@@ -89,18 +100,18 @@ class ExperienceManager:
         market_changes: Optional[Dict[str, Any]] = None
     ):
         """
-        记录交易完成（集成 RAG 评价和学习）
+        记录交易完成
 
         Args:
             (参数同trade_logger.log_trade)
             position_metrics: 持仓指标（可选）
             market_changes: 市场变化（可选）
         """
-        # 【新增】使用 RAG 系统评价和存储交易
-        evaluation = None
-        if self.rag_manager:
+        # 生成自我反思报告（如果启用）
+        reflection_text = ""
+        if self.reflection_engine:
             try:
-                # 尝试从 market_condition 中提取模型评分
+                # 提取模型评分
                 model_score = None
                 if market_condition and "模型评分" in market_condition:
                     try:
@@ -108,11 +119,85 @@ class ExperienceManager:
                         match = re.search(r'模型评分\s+(\d+(?:\.\d+)?)/100', market_condition)
                         if match:
                             model_score = float(match.group(1))
-                            logger.debug(f"提取到模型评分: {model_score}")
                     except:
                         pass
 
-                evaluation = self.rag_manager.store_trade_experience(
+                # 计算持仓时长
+                if isinstance(entry_time, str):
+                    entry_time = datetime.fromisoformat(entry_time)
+                if isinstance(exit_time, str):
+                    exit_time = datetime.fromisoformat(exit_time)
+
+                duration_minutes = int((exit_time - entry_time).total_seconds() / 60)
+
+                # 生成反思
+                reflection = self.reflection_engine.generate_reflection(
+                    trade_id=trade_id,
+                    pair=pair,
+                    side=side,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    entry_reason=entry_reason,
+                    exit_reason=exit_reason,
+                    profit_pct=profit_pct,
+                    duration_minutes=duration_minutes,
+                    leverage=leverage,
+                    position_metrics=position_metrics,
+                    market_changes=market_changes,
+                    model_score=model_score
+                )
+
+                # 格式化反思报告
+                reflection_text = self.reflection_engine.format_reflection_for_log(reflection)
+                logger.info(f"\n{reflection_text}")
+
+                # 从反思中提取教训
+                lessons = "\n".join(reflection.get('lessons', []))
+
+            except Exception as e:
+                logger.error(f"生成自我反思失败: {e}", exc_info=True)
+                # 回退到传统分析
+                lessons = self._analyze_trade(
+                    pair=pair,
+                    side=side,
+                    profit_pct=profit_pct,
+                    entry_reason=entry_reason,
+                    exit_reason=exit_reason,
+                    max_drawdown=max_drawdown
+                )
+        else:
+            # 传统分析方式
+            lessons = self._analyze_trade(
+                pair=pair,
+                side=side,
+                profit_pct=profit_pct,
+                entry_reason=entry_reason,
+                exit_reason=exit_reason,
+                max_drawdown=max_drawdown
+            )
+
+        # 交易评价和奖励记录（如果启用）
+        if self.trade_evaluator and self.reward_learning:
+            try:
+                # 提取模型评分
+                model_score = None
+                if market_condition and "模型评分" in market_condition:
+                    try:
+                        import re
+                        match = re.search(r'模型评分\s+(\d+(?:\.\d+)?)/100', market_condition)
+                        if match:
+                            model_score = float(match.group(1))
+                    except:
+                        pass
+
+                # 确保时间格式
+                if isinstance(entry_time, str):
+                    entry_time = datetime.fromisoformat(entry_time)
+                if isinstance(exit_time, str):
+                    exit_time = datetime.fromisoformat(exit_time)
+
+                # 交易评价
+                evaluation = self.trade_evaluator.evaluate_trade(
                     trade_id=trade_id,
                     pair=pair,
                     side=side,
@@ -130,49 +215,34 @@ class ExperienceManager:
                     model_score=model_score
                 )
 
-                # 记录到奖励学习系统
-                if evaluation:
-                    decision_context = {
-                        'pair': pair,
-                        'side': side,
-                        'leverage': leverage,
-                        'market_condition': market_condition
-                    }
-                    if position_metrics:
-                        decision_context.update(position_metrics)
+                # 记录奖励
+                decision_context = {
+                    'pair': pair,
+                    'side': side,
+                    'leverage': leverage,
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'market_condition': market_condition
+                }
+                if position_metrics:
+                    decision_context.update(position_metrics)
 
-                    self.rag_manager.reward_learning.record_reward(
-                        trade_id=trade_id,
-                        pair=pair,
-                        action_type='trade_complete',
-                        decision_context=decision_context,
-                        evaluation=evaluation
-                    )
+                self.reward_learning.record_reward(
+                    trade_id=trade_id,
+                    pair=pair,
+                    action_type='trade_complete',
+                    decision_context=decision_context,
+                    evaluation=evaluation
+                )
 
-                    logger.info(
-                        f"✓ 交易已评价并存储到RAG: {pair} | "
-                        f"评分={evaluation.get('total_score', 0):.0f} | "
-                        f"评级={evaluation.get('grade', 'C')}"
-                    )
+                logger.info(
+                    f"✓ 交易评价完成: 总分={evaluation.get('total_score', 0):.0f}/100 | "
+                    f"等级={evaluation.get('grade', 'C')} | "
+                    f"奖励={evaluation.get('reward', 0):+.2f}"
+                )
 
             except Exception as e:
-                logger.error(f"RAG评价失败: {e}", exc_info=True)
-
-        # 【传统方式】分析交易并提取教训
-        lessons = self._analyze_trade(
-            pair=pair,
-            side=side,
-            profit_pct=profit_pct,
-            entry_reason=entry_reason,
-            exit_reason=exit_reason,
-            max_drawdown=max_drawdown
-        )
-
-        # 如果有RAG评价，附加评语
-        if evaluation:
-            comments = evaluation.get('comments', {})
-            if comments.get('suggestions'):
-                lessons += " | RAG建议: " + comments['suggestions'][0]
+                logger.error(f"交易评价或奖励记录失败: {e}", exc_info=True)
 
         # 记录到日志
         self.trade_logger.log_trade(

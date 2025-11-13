@@ -11,6 +11,13 @@ cd "$SCRIPT_DIR"
 CONTAINER_NAME="freqtrade-llm"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 
+# 策略数据路径
+LOG_DIR="user_data/logs"
+DECISION_LOG="$LOG_DIR/llm_decisions.jsonl"
+TRADE_LOG="$LOG_DIR/trade_experience.jsonl"
+REWARD_LOG="$LOG_DIR/reward_learning.json"
+TRADE_DB_PREFIX="user_data/tradesv3.sqlite"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,6 +44,18 @@ print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
+ensure_log_file() {
+    local file_path="$1"
+    local dir_path
+
+    dir_path="$(dirname "$file_path")"
+    mkdir -p "$dir_path"
+
+    if [ ! -f "$file_path" ]; then
+        touch "$file_path"
+    fi
+}
+
 # 检查Docker是否运行
 check_docker() {
     if ! docker info > /dev/null 2>&1; then
@@ -48,23 +67,52 @@ check_docker() {
 # 检查新版本
 check_new_version() {
     echo -e "\n${BLUE}[1/4]${NC} 检查Freqtrade版本..."
+    local local_id=""
+    local remote_id=""
+    local local_created=""
+    local remote_created=""
+    local local_short=""
+    local remote_short=""
 
-    # 获取本地镜像版本
-    LOCAL_VERSION=$(docker images freqtradeorg/freqtrade:stable --format "{{.Tag}}" | head -n 1)
+    if docker image inspect freqtradeorg/freqtrade:stable > /dev/null 2>&1; then
+        local_id=$(docker image inspect --format '{{.Id}}' freqtradeorg/freqtrade:stable 2>/dev/null | head -n 1)
+        local_created=$(docker image inspect --format '{{.Created}}' freqtradeorg/freqtrade:stable 2>/dev/null | head -n 1)
+        local_short=${local_id#sha256:}
+        local_short=${local_short:0:12}
+        echo "  当前镜像: ${local_short:-未知} (${local_created:-未知时间})"
+    else
+        print_warning "本地未发现 freqtrade:stable 镜像，将获取最新版本..."
+    fi
 
-    # 拉取最新版本信息（不下载）
     print_warning "检查远程最新版本..."
-    docker pull freqtradeorg/freqtrade:stable > /dev/null 2>&1 || true
+    if ! docker pull freqtradeorg/freqtrade:stable > /dev/null 2>&1; then
+        print_error "无法获取远程镜像，请检查网络或凭证"
+        return 2
+    fi
 
-    REMOTE_VERSION=$(docker images freqtradeorg/freqtrade:stable --format "{{.Tag}}" | head -n 1)
+    remote_id=$(docker image inspect --format '{{.Id}}' freqtradeorg/freqtrade:stable 2>/dev/null | head -n 1)
+    remote_created=$(docker image inspect --format '{{.Created}}' freqtradeorg/freqtrade:stable 2>/dev/null | head -n 1)
 
-    if [ "$LOCAL_VERSION" != "$REMOTE_VERSION" ]; then
+    if [ -z "$remote_id" ]; then
+        print_error "未能读取远程镜像信息"
+        return 2
+    fi
+
+    remote_short=${remote_id#sha256:}
+    remote_short=${remote_short:0:12}
+
+    if [ -z "$local_id" ]; then
+        print_success "已下载最新镜像: ${remote_short} (${remote_created})"
+        return 0
+    fi
+
+    if [ "$local_id" != "$remote_id" ]; then
         print_warning "发现新版本！"
-        echo "  本地版本: $LOCAL_VERSION"
-        echo "  远程版本: $REMOTE_VERSION"
+        echo "  本地镜像: ${local_short}"
+        echo "  最新镜像: ${remote_short} (${remote_created})"
         return 0
     else
-        print_success "已是最新版本: $LOCAL_VERSION"
+        print_success "已是最新版本: ${remote_short} (${remote_created})"
         return 1
     fi
 }
@@ -107,6 +155,25 @@ view_logs() {
     docker logs -f $CONTAINER_NAME
 }
 
+tail_host_log() {
+    local file_path="$1"
+    local label="$2"
+
+    ensure_log_file "$file_path"
+
+    echo -e "\n${BLUE}${label}${NC}"
+    echo -e "${YELLOW}按 Ctrl+C 退出日志查看${NC}\n"
+    tail -n 40 -f "$file_path"
+}
+
+view_decision_logs() {
+    tail_host_log "$DECISION_LOG" "LLM 决策日志 (llm_decisions.jsonl)"
+}
+
+view_trade_logs() {
+    tail_host_log "$TRADE_LOG" "交易经验日志 (trade_experience.jsonl)"
+}
+
 # 清理数据
 clean_data() {
     echo -e "\n${RED}=================================================${NC}"
@@ -114,11 +181,11 @@ clean_data() {
     echo -e "${RED}=================================================${NC}"
     echo ""
     echo -e "${YELLOW}警告：此操作将删除以下数据：${NC}"
-    echo "  1. RAG向量存储 (vector_store, 交易经验)"
-    echo "  2. 奖励学习数据 (reward_learning.json)"
-    echo "  3. 交易数据库 (tradesv3.sqlite)"
-    echo "  4. Freqtrade日志"
-    echo "  5. LLM决策日志"
+    echo "  1. LLM 决策日志 (${DECISION_LOG})"
+    echo "  2. 交易经验日志 (${TRADE_LOG})"
+    echo "  3. 奖励学习数据 (${REWARD_LOG})"
+    echo "  4. Freqtrade 运行日志 (${LOG_DIR}/freqtrade.log*)"
+    echo "  5. 交易数据库 (${TRADE_DB_PREFIX}*)"
     echo ""
     echo -e "${RED}此操作不可恢复！${NC}"
     echo ""
@@ -139,19 +206,20 @@ clean_data() {
     fi
 
     # 清理文件
-    echo "清理 RAG 向量存储..."
-    rm -rf user_data/rag/*
+    echo "清理 LLM 决策日志..."
+    rm -f "$DECISION_LOG"
+
+    echo "清理交易经验日志..."
+    rm -f "$TRADE_LOG"
 
     echo "清理奖励学习数据..."
-    rm -f user_data/logs/reward_learning.json
+    rm -f "$REWARD_LOG"
 
     echo "清理交易数据库..."
-    rm -f user_data/tradesv3.sqlite*
+    rm -f "${TRADE_DB_PREFIX}"*
 
-    echo "清理日志文件..."
-    rm -f user_data/logs/freqtrade.log*
-    rm -f user_data/logs/llm_decisions.jsonl
-    rm -f user_data/logs/trade_experience.jsonl
+    echo "清理 Freqtrade 运行日志..."
+    rm -f "$LOG_DIR"/freqtrade.log*
 
     print_success "数据清理完成！"
     echo ""
@@ -230,13 +298,15 @@ show_menu() {
     echo "  1) 快速启动 (直接启动 + 查看日志) ⚡"
     echo "  2) 快速重启 (重启容器 + 查看日志)"
     echo "  3) 完整部署 (检查版本 + 构建 + 启动 + 查看日志)"
-    echo "  4) 只查看日志"
-    echo "  5) 清理所有数据"
-    echo "  6) 检查版本"
-    echo "  7) 停止服务"
+    echo "  4) 查看容器日志"
+    echo "  5) 查看LLM决策日志"
+    echo "  6) 查看交易经验日志"
+    echo "  7) 清理策略日志和数据库"
+    echo "  8) 检查Freqtrade镜像版本"
+    echo "  9) 停止服务"
     echo "  0) 退出"
     echo ""
-    read -p "请输入选项 [0-7]: " choice
+    read -p "请输入选项 [0-9]: " choice
 
     case $choice in
         1)
@@ -252,16 +322,22 @@ show_menu() {
             view_logs
             ;;
         5)
-            clean_data
+            view_decision_logs
             ;;
         6)
+            view_trade_logs
+            ;;
+        7)
+            clean_data
+            ;;
+        8)
             check_docker
             check_new_version
             echo ""
             read -p "按任意键返回菜单..." -n 1
             show_menu
             ;;
-        7)
+        9)
             echo -e "\n${BLUE}停止服务...${NC}"
             docker-compose down
             print_success "服务已停止"
@@ -297,6 +373,15 @@ main() {
             logs)
                 view_logs
                 ;;
+            decisions|decision-logs)
+                view_decision_logs
+                ;;
+            trades|trade-logs)
+                view_trade_logs
+                ;;
+            version)
+                check_new_version
+                ;;
             clean)
                 clean_data
                 ;;
@@ -305,15 +390,18 @@ main() {
                 print_success "服务已停止"
                 ;;
             *)
-                echo "用法: $0 [start|restart|deploy|logs|clean|stop]"
+                echo "用法: $0 [start|restart|deploy|logs|decisions|trades|version|clean|stop]"
                 echo ""
                 echo "命令说明："
-                echo "  start   - 快速启动（推荐日常使用）⚡"
-                echo "  restart - 快速重启"
-                echo "  deploy  - 完整部署（检查更新+构建）"
-                echo "  logs    - 查看日志"
-                echo "  clean   - 清理所有数据"
-                echo "  stop    - 停止服务"
+                echo "  start     - 快速启动（推荐日常使用）⚡"
+                echo "  restart   - 快速重启"
+                echo "  deploy    - 完整部署（检查更新+构建）"
+                echo "  logs      - 查看容器日志"
+                echo "  decisions - 查看LLM决策日志"
+                echo "  trades    - 查看交易经验日志"
+                echo "  version   - 检查Freqtrade镜像版本"
+                echo "  clean     - 清理日志和数据库"
+                echo "  stop      - 停止服务"
                 echo ""
                 echo "或者不带参数运行以显示交互式菜单"
                 exit 1

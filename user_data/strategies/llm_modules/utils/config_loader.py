@@ -55,28 +55,12 @@ class ConfigLoader:
         """获取默认配置"""
         return {
             "llm_config": {
-                "api_base": "http://host.docker.internal:3120",
-                "api_key": "sk-xrAnFvo5PrbVXuqYS7WdVahVPRCg5CGJ1nVEqNYDQjNOgYvW",
-                "model": "qwen/qwen3-coder-30b",
-                "embedding_model": "text-embedding-bge-m3",
+                "api_base": "http://localhost:11434/v1",
+                "api_key": "sk-xxx",
+                "model": "your-model-name",
                 "temperature": 0.7,
                 "max_tokens": 2000,
                 "timeout": 60
-            },
-            "rag_config": {
-                "enable": True,
-                "vector_db": "chromadb",
-                "similarity_top_k": 5,
-                "min_similarity": 0.7,
-                "storage_path": "./user_data/data/vector_store",
-                "max_history_size": 10000,
-                "cleanup_days": 30,
-                "max_document_chars": 4000,
-                "skip_sections": [
-                    "【关键指标历史",
-                    "【K线历史",
-                    "【多时间框架K线数据】"
-                ]
             },
             "risk_management": {
                 "max_leverage": 100,
@@ -95,7 +79,6 @@ class ConfigLoader:
                 "max_context_tokens": 6000,
                 "system_prompt_tokens": 500,
                 "market_data_tokens": 800,
-                "rag_history_tokens": 1500,
                 "enable_context_compression": True,
                 "include_timeframe_alignment": True,
                 "include_timeframe_guidance": True,
@@ -139,12 +122,6 @@ class ConfigLoader:
             if key not in llm_config:
                 logger.warning(f"LLM配置缺少必需字段: {key}")
 
-        # 验证RAG配置
-        if self.config.get("rag_config", {}).get("enable", False):
-            rag_config = self.config.get("rag_config", {})
-            if "storage_path" not in rag_config:
-                logger.warning("RAG配置缺少storage_path")
-
         # 验证风险管理配置
         risk_config = self.config.get("risk_management", {})
         if risk_config.get("max_leverage", 0) > 100:
@@ -153,10 +130,6 @@ class ConfigLoader:
     def get_llm_config(self) -> Dict[str, Any]:
         """获取LLM配置"""
         return self.config.get("llm_config", {})
-
-    def get_rag_config(self) -> Dict[str, Any]:
-        """获取RAG配置"""
-        return self.config.get("rag_config", {})
 
     def get_risk_config(self) -> Dict[str, Any]:
         """获取风险管理配置"""
@@ -169,10 +142,6 @@ class ConfigLoader:
     def get_context_config(self) -> Dict[str, Any]:
         """获取上下文管理配置"""
         return self.config.get("context_config", {})
-
-    def is_rag_enabled(self) -> bool:
-        """检查RAG是否启用"""
-        return self.config.get("rag_config", {}).get("enable", False)
 
     def get_all_config(self) -> Dict[str, Any]:
         """获取完整配置"""

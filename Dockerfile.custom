@@ -7,9 +7,7 @@ USER root
 # 安装额外的Python依赖
 RUN pip install --no-cache-dir \
     chromadb>=0.4.22 \
-    requests>=2.31.0 \
-    numpy>=1.20.0 \
-    faiss-cpu>=1.7.0
+    requests>=2.31.0
 
 # 切换回freqtrade用户
 USER ftuser

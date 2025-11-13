@@ -37,6 +37,15 @@ class TradeLogger:
         self.decision_log_path.parent.mkdir(parents=True, exist_ok=True)
         self.trade_log_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # 确保日志文件存在（如果不存在则创建空文件）
+        if not self.decision_log_path.exists():
+            self.decision_log_path.touch()
+            logger.info(f"已创建决策日志文件: {self.decision_log_path}")
+        
+        if not self.trade_log_path.exists():
+            self.trade_log_path.touch()
+            logger.info(f"已创建交易日志文件: {self.trade_log_path}")
+
         self.log_decisions = experience_config.get("log_decisions", True)
         self.log_trades = experience_config.get("log_trades", True)
 
@@ -246,13 +255,13 @@ class TradeLogger:
             else:
                 summary = self._generate_decision_summary(logs)
 
-            output_path = Path(output_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file = Path(output_path)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(summary, f, indent=2, ensure_ascii=False)
 
-            logger.info(f"摘要已导出到: {output_path}")
+            logger.info(f"摘要已导出到: {output_file}")
             return True
 
         except Exception as e:

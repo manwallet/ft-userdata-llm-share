@@ -188,8 +188,7 @@ class FunctionExecutor:
         categories = {
             "trading": [],
             "market_data": [],
-            "risk_management": [],
-            "rag": []
+            "risk_management": []
         }
 
         for func_name in self.functions.keys():
@@ -199,8 +198,6 @@ class FunctionExecutor:
                 categories["market_data"].append(func_name)
             elif any(keyword in func_name for keyword in ["balance", "position", "calculate", "check_risk"]):
                 categories["risk_management"].append(func_name)
-            elif any(keyword in func_name for keyword in ["query", "similar", "experience", "pattern", "lesson"]):
-                categories["rag"].append(func_name)
 
         return categories
 

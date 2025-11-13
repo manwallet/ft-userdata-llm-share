@@ -11,16 +11,14 @@ logger = logging.getLogger(__name__)
 class TradingTools:
     """交易控制工具集（简化版）"""
 
-    def __init__(self, strategy_instance, rag_manager=None):
+    def __init__(self, strategy_instance):
         """
         初始化交易工具
 
         Args:
             strategy_instance: freqtrade策略实例
-            rag_manager: RAG管理器实例（可选）
         """
         self.strategy = strategy_instance
-        self.rag_manager = rag_manager
         self._signal_cache = {}  # 缓存本周期的信号
 
     def get_tools_schema(self) -> list[Dict[str, Any]]:
@@ -232,64 +230,6 @@ class TradingTools:
                         }
                     },
                     "required": ["pair", "confidence_score", "rsi_value", "reason"]
-                }
-            },
-            {
-                "name": "record_decision_to_rag",
-                "description": "记录决策到RAG系统 - 将重要的hold/exit决策存入RAG，供未来检索学习。建议：盈利>5%还在hold时记录，或exit时记录",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pair": {
-                            "type": "string",
-                            "description": "交易对"
-                        },
-                        "decision_type": {
-                            "type": "string",
-                            "description": "决策类型: 'hold' | 'exit'",
-                            "enum": ["hold", "exit"]
-                        },
-                        "reason": {
-                            "type": "string",
-                            "description": "决策理由 - 为什么hold或exit"
-                        },
-                        "confidence": {
-                            "type": "number",
-                            "description": "决策置信度 (0-1)，例如0.8表示80%信心"
-                        },
-                        "current_profit_pct": {
-                            "type": "number",
-                            "description": "当前盈亏百分比（考虑杠杆后）"
-                        }
-                    },
-                    "required": ["pair", "decision_type", "reason", "confidence", "current_profit_pct"]
-                }
-            },
-            {
-                "name": "query_rag_stats",
-                "description": "查询RAG系统统计信息 - 查看历史记录数量、存储状态，判断是否需要清理",
-                "parameters": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
-            {
-                "name": "cleanup_rag_history",
-                "description": "清理RAG历史数据 - 删除低质量或过时的记录。建议：当decisions超过8000条或检索质量不佳时调用",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "strategy": {
-                            "type": "string",
-                            "description": "清理策略: 'low_quality'(删除低质量记录) | 'compress'(压缩历史，保留最新) | 'old_records'(删除30天以上旧记录)",
-                            "enum": ["low_quality", "compress", "old_records"]
-                        },
-                        "reason": {
-                            "type": "string",
-                            "description": "清理原因 - 说明为什么需要清理"
-                        }
-                    },
-                    "required": ["strategy", "reason"]
                 }
             }
         ]
@@ -661,191 +601,6 @@ class TradingTools:
 
         except Exception as e:
             logger.error(f"等待信号失败: {e}")
-            return {"success": False, "message": str(e)}
-
-
-    def record_decision_to_rag(
-        self,
-        pair: str,
-        decision_type: str,
-        reason: str,
-        confidence: float,
-        current_profit_pct: float
-    ) -> Dict[str, Any]:
-        """
-        记录决策到RAG系统
-
-        Args:
-            pair: 交易对
-            decision_type: 决策类型 ('hold' | 'exit')
-            reason: 决策理由
-            confidence: 决策置信度 (0-1)
-            current_profit_pct: 当前盈亏百分比
-
-        Returns:
-            执行结果
-        """
-        try:
-            if not self.rag_manager:
-                return {
-                    "success": False,
-                    "message": "RAG系统未启用"
-                }
-
-            if decision_type not in ['hold', 'exit']:
-                return {
-                    "success": False,
-                    "message": "决策类型必须是 'hold' 或 'exit'"
-                }
-
-            if confidence < 0 or confidence > 1:
-                return {
-                    "success": False,
-                    "message": "置信度必须在 0-1 之间"
-                }
-
-            # 构建决策记录
-            decision_record = {
-                "pair": pair,
-                "decision_type": decision_type,
-                "reason": reason,
-                "confidence": confidence,
-                "current_profit_pct": current_profit_pct
-            }
-
-            logger.info(f"[RAG记录] {pair} | {decision_type.upper()} | 盈亏: {current_profit_pct:+.2f}% | 置信度: {confidence:.0%}")
-            logger.info(f"  理由: {reason[:100]}...")
-
-            return {
-                "success": True,
-                "message": f"决策已记录到RAG - {decision_type}决策，当前盈亏{current_profit_pct:+.2f}%",
-                "decision_record": decision_record
-            }
-
-        except Exception as e:
-            logger.error(f"记录决策到RAG失败: {e}")
-            return {"success": False, "message": str(e)}
-
-    def query_rag_stats(self) -> Dict[str, Any]:
-        """
-        查询RAG系统统计信息
-
-        Returns:
-            RAG统计信息
-        """
-        try:
-            if not self.rag_manager:
-                return {
-                    "success": False,
-                    "message": "RAG系统未启用"
-                }
-
-            # 获取向量存储统计
-            vector_count = len(self.rag_manager.vector_store.metadata) if self.rag_manager.vector_store else 0
-
-            # 获取奖励学习统计
-            reward_stats = {}
-            if self.rag_manager.reward_learner:
-                reward_stats = self.rag_manager.reward_learner.get_learning_stats()
-
-            stats = {
-                "total_experiences": vector_count,
-                "reward_stats": reward_stats,
-                "storage_path": str(self.rag_manager.storage_path) if hasattr(self.rag_manager, 'storage_path') else "未知"
-            }
-
-            logger.info(f"[RAG统计] 总经验数: {vector_count} | 奖励记录: {len(reward_stats.get('recent_rewards', []))}")
-
-            return {
-                "success": True,
-                "message": f"RAG系统运行正常 - 已存储{vector_count}条经验",
-                "stats": stats
-            }
-
-        except Exception as e:
-            logger.error(f"查询RAG统计失败: {e}")
-            return {"success": False, "message": str(e)}
-
-    def cleanup_rag_history(
-        self,
-        strategy: str,
-        reason: str
-    ) -> Dict[str, Any]:
-        """
-        清理RAG历史数据
-
-        Args:
-            strategy: 清理策略 ('low_quality' | 'compress' | 'old_records')
-            reason: 清理原因
-
-        Returns:
-            执行结果
-        """
-        try:
-            if not self.rag_manager:
-                return {
-                    "success": False,
-                    "message": "RAG系统未启用"
-                }
-
-            if strategy not in ['low_quality', 'compress', 'old_records']:
-                return {
-                    "success": False,
-                    "message": "清理策略必须是 'low_quality', 'compress' 或 'old_records'"
-                }
-
-            before_count = len(self.rag_manager.vector_store.metadata) if self.rag_manager.vector_store else 0
-
-            logger.info(f"[RAG清理] 策略: {strategy} | 理由: {reason}")
-            logger.info(f"  清理前记录数: {before_count}")
-
-            # 根据策略执行清理
-            deleted_count = 0
-
-            if strategy == 'low_quality':
-                # 删除评分<50的低质量记录
-                if self.rag_manager.vector_store:
-                    metadata = self.rag_manager.vector_store.metadata
-                    low_quality_indices = [
-                        i for i, meta in enumerate(metadata)
-                        if meta.get('score', 100) < 50
-                    ]
-                    deleted_count = len(low_quality_indices)
-                    logger.info(f"  识别到 {deleted_count} 条低质量记录（评分<50）")
-
-            elif strategy == 'compress':
-                # 压缩历史，只保留最新1000条
-                if self.rag_manager.vector_store and before_count > 1000:
-                    deleted_count = before_count - 1000
-                    logger.info(f"  将压缩 {deleted_count} 条旧记录，保留最新1000条")
-
-            elif strategy == 'old_records':
-                # 删除30天以上的旧记录
-                from datetime import datetime, timedelta
-                cutoff_date = datetime.now() - timedelta(days=30)
-
-                if self.rag_manager.vector_store:
-                    metadata = self.rag_manager.vector_store.metadata
-                    old_indices = [
-                        i for i, meta in enumerate(metadata)
-                        if datetime.fromisoformat(meta.get('timestamp', datetime.now().isoformat())) < cutoff_date
-                    ]
-                    deleted_count = len(old_indices)
-                    logger.info(f"  识别到 {deleted_count} 条30天以上的旧记录")
-
-            logger.warning(f"[RAG清理] 当前为模拟模式，未实际删除数据。实际删除需要实现向量删除功能")
-
-            return {
-                "success": True,
-                "message": f"清理完成 - 策略: {strategy}，识别到 {deleted_count} 条需清理记录（未实际删除）",
-                "before_count": before_count,
-                "identified_for_deletion": deleted_count,
-                "strategy": strategy,
-                "reason": reason
-            }
-
-        except Exception as e:
-            logger.error(f"清理RAG历史失败: {e}")
             return {"success": False, "message": str(e)}
 
     def get_signal(self, pair: str) -> Optional[Dict[str, Any]]:

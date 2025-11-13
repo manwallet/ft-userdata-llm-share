@@ -40,8 +40,8 @@ class MarketSentiment:
 
         try:
             # Alternative.me Fear & Greed Index API
-            # 获取最近7天数据用于分析趋势和持续时间
-            url = "https://api.alternative.me/fng/?limit=7"
+            # 获取最近30天数据，让模型看到完整的情绪变化历史
+            url = "https://api.alternative.me/fng/?limit=30"
             response = requests.get(url, timeout=5)
             response.raise_for_status()
 
@@ -66,7 +66,17 @@ class MarketSentiment:
                 elif diff < -5:
                     trend = 'falling'
 
-            # 分析情绪持续时间和历史变化
+            # 构建完整历史（带时间戳和分类）
+            history_with_time = []
+            for d in data['data']:
+                history_with_time.append({
+                    'value': int(d['value']),
+                    'classification': d['value_classification'],
+                    'timestamp': int(d['timestamp']),
+                    'date': datetime.fromtimestamp(int(d['timestamp'])).strftime('%Y-%m-%d')
+                })
+
+            # 分析情绪持续时间
             duration_days = 0
             history_values = [int(d['value']) for d in data['data']]
 
@@ -85,12 +95,18 @@ class MarketSentiment:
                 else:
                     break
 
-            # 计算7天变化趋势
+            # 计算30天变化趋势
             if len(history_values) >= 7:
-                week_change = history_values[0] - history_values[-1]
+                week_change = history_values[0] - history_values[6]
                 week_trend = 'rising' if week_change > 10 else ('falling' if week_change < -10 else 'stable')
             else:
                 week_trend = trend
+
+            if len(history_values) >= 30:
+                month_change = history_values[0] - history_values[-1]
+                month_trend = 'rising' if month_change > 15 else ('falling' if month_change < -15 else 'stable')
+            else:
+                month_trend = week_trend
 
             result = {
                 'value': value,
@@ -98,8 +114,10 @@ class MarketSentiment:
                 'timestamp': timestamp,
                 'trend': trend,  # 短期趋势（1-2天）
                 'week_trend': week_trend,  # 周趋势
+                'month_trend': month_trend,  # 月趋势
                 'duration_days': duration_days,  # 当前情绪持续天数
-                'history_7d': history_values,  # 最近7天历史值
+                'history_30d': history_with_time,  # 最近30天历史（带时间戳）
+                'history_values': history_values,  # 仅数值（用于快速趋势判断）
                 'interpretation': self._interpret_fear_greed(value, trend, duration_days)
             }
 
@@ -217,7 +235,7 @@ class MarketSentiment:
 
     def get_long_short_ratio(self, pair: str) -> Optional[Dict[str, Any]]:
         """
-        获取币安多空比历史数据（7天，1小时间隔）
+        获取币安多空比历史数据（30天，1小时间隔）
 
         参数:
             pair: 交易对，如 'BTC/USDT:USDT'
@@ -228,7 +246,8 @@ class MarketSentiment:
             'trend': 'bullish',  # bullish/bearish/neutral
             'interpretation': '多头占优',
             'history_24h': [...],  # 最近24小时数据
-            'history_7d': [...],  # 最近7天数据（最多168个点）
+            'history_7d': [...],  # 最近7天数据
+            'history_30d': [...],  # 最近30天数据（最多720个点）
             'extreme_level': 'normal'  # extreme_long/extreme_short/normal
         }
         """
@@ -247,7 +266,7 @@ class MarketSentiment:
             params = {
                 'symbol': symbol,
                 'period': '1h',  # 1小时间隔
-                'limit': 168  # 7天 × 24小时
+                'limit': 500  # 币安API最大限制，约20天数据
             }
 
             response = requests.get(url, params=params, timeout=10)
@@ -260,14 +279,15 @@ class MarketSentiment:
 
             # 解析数据：[{longShortRatio, longAccount, shortAccount, timestamp}, ...]
             # 数据是按时间倒序的，最新的在前
+            # 注意：longAccount和shortAccount是小数比例（如0.654代表65.4%），需要乘100
             history = []
             for item in reversed(data):  # 反转成正序（旧->新）
                 ratio = float(item.get('longShortRatio', 0))
                 if ratio > 0:
                     history.append({
                         'ratio': ratio,
-                        'long_pct': float(item.get('longAccount', 0)),
-                        'short_pct': float(item.get('shortAccount', 0)),
+                        'long_pct': float(item.get('longAccount', 0)) * 100,  # 转换为百分比
+                        'short_pct': float(item.get('shortAccount', 0)) * 100,  # 转换为百分比
                         'timestamp': int(item.get('timestamp', 0))
                     })
 
@@ -329,7 +349,8 @@ class MarketSentiment:
                 'extreme_level': extreme_level,
                 'duration_hours': duration_hours,
                 'history_24h': [h['ratio'] for h in history[-24:]],
-                'history_7d': [h['ratio'] for h in history],
+                'history_7d': [h['ratio'] for h in history[-168:]] if len(history) >= 168 else [h['ratio'] for h in history],
+                'history_30d': history,  # 完整历史（包含ratio, long_pct, short_pct, timestamp）
                 'interpretation': self._interpret_long_short_ratio(current_ratio, trend, extreme_level, duration_hours)
             }
 

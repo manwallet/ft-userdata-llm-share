@@ -29,13 +29,19 @@ from llm_modules.indicators.indicator_calculator import IndicatorCalculator
 logger = logging.getLogger(__name__)
 
 # 历史上下文系统
-from llm_modules.experience.simple_historical_context import SimpleHistoricalContext
 from llm_modules.experience.trade_reviewer import TradeReviewer
 
 # 增强模块导入
 from llm_modules.utils.position_tracker import PositionTracker
 from llm_modules.utils.market_comparator import MarketStateComparator
 from llm_modules.utils.decision_checker import DecisionQualityChecker
+
+# 自我学习系统导入
+from llm_modules.learning.historical_query import HistoricalQueryEngine
+from llm_modules.learning.pattern_analyzer import PatternAnalyzer
+from llm_modules.learning.self_reflection import SelfReflectionEngine
+from llm_modules.learning.trade_evaluator import TradeEvaluator
+from llm_modules.learning.reward_learning import RewardLearningSystem
 
 
 class LLMFunctionStrategy(IStrategy):
@@ -44,7 +50,6 @@ class LLMFunctionStrategy(IStrategy):
 
     特性:
     - OpenAI Function Calling 完整交易控制
-    - RAG语义检索系统 (text-embedding-bge-m3)
     - 支持期货、多空双向、动态杠杆
     - 经验学习和持续优化
     """
@@ -87,50 +92,50 @@ class LLMFunctionStrategy(IStrategy):
             self.experience_config = self.config_loader.get_experience_config()
             self.context_config = self.config_loader.get_context_config()
 
-            # 2. 初始化工具类
-            self.context_builder = ContextBuilder(self.context_config)
+            # 2. 初始化自我学习系统
+            trade_log_path = self.experience_config.get('trade_log_path', './user_data/logs/trade_experience.jsonl')
+            self.historical_query = HistoricalQueryEngine(trade_log_path)
+            self.pattern_analyzer = PatternAnalyzer(min_sample_size=5)
+            self.self_reflection = SelfReflectionEngine()
+            self.trade_evaluator = TradeEvaluator()
 
-            # 3. 初始化函数执行器
+            # 初始化奖励学习系统
+            reward_config = {
+                'storage_path': './user_data/logs/reward_learning.json',
+                'learning_rate': 0.1,
+                'discount_factor': 0.95
+            }
+            self.reward_learning = RewardLearningSystem(reward_config)
+
+            logger.info("✓ 自我学习系统已初始化 (HistoricalQuery, PatternAnalyzer, SelfReflection, TradeEvaluator, RewardLearning)")
+
+            # 3. 初始化上下文构建器（注入学习组件）
+            self.context_builder = ContextBuilder(
+                context_config=self.context_config,
+                historical_query_engine=self.historical_query,
+                pattern_analyzer=self.pattern_analyzer
+            )
+
+            # 4. 初始化函数执行器
             self.function_executor = FunctionExecutor()
 
-            # 4. 初始化交易工具（简化版 - 只保留交易控制工具）
+            # 5. 初始化交易工具（简化版 - 只保留交易控制工具）
             self.trading_tools = TradingTools(self)
-
-            # 5. 初始化简单历史上下文系统
-            self.historical_context = SimpleHistoricalContext(self.experience_config)
-            logger.info("✓ 简单历史上下文系统已启用")
 
             # 6. 初始化LLM客户端
             self.llm_client = LLMClient(self.llm_config, self.function_executor)
 
-            # 7. 注册所有工具函数
+            # 8. 注册所有工具函数
             self._register_all_tools()
 
-            # 8. 初始化经验系统
+            # 9. 初始化经验系统（注入反思引擎）
             self.trade_logger = TradeLogger(self.experience_config)
-
-            # 9. 初始化 RAG 系统（可选）
-            self.rag_manager = None
-            if self.experience_config.get("enable_rag", False):
-                try:
-                    from llm_modules.learning.rag_manager import RAGManager
-                    rag_config = self.experience_config.get("rag_config", {})
-                    self.rag_manager = RAGManager(rag_config)
-                    logger.info("✓ RAG 学习系统已启用")
-                except Exception as e:
-                    logger.warning(f"RAG 系统初始化失败（将使用传统模式）: {e}")
-
-            # 将 RAG 管理器设置到 trading_tools
-            self.trading_tools.rag_manager = self.rag_manager
-
-            # 重新注册工具函数（使RAG函数可用）
-            if self.rag_manager:
-                self._register_all_tools()
-                logger.info("✓ RAG 工具函数已注册")
 
             self.experience_manager = ExperienceManager(
                 trade_logger=self.trade_logger,
-                rag_manager=self.rag_manager
+                self_reflection_engine=self.self_reflection,
+                trade_evaluator=self.trade_evaluator,
+                reward_learning=self.reward_learning
             )
 
             # 10. 缓存
@@ -154,8 +159,7 @@ class LLMFunctionStrategy(IStrategy):
             logger.info("✓ 策略初始化完成")
             logger.info(f"  - LLM模型: {self.llm_config.get('model')}")
             logger.info(f"  - 交易工具已注册: {len(self.function_executor.list_functions())} 个")
-            logger.info(f"  - 历史上下文系统: 已启用（简单JSONL模式）")
-            logger.info(f"  - 模式: 简化版（市场数据已内置在context中）")
+            logger.info(f"  - 自我学习系统: 已启用（历史查询+模式分析+自我反思）")
             logger.info("=" * 60)
 
         except Exception as e:
@@ -328,7 +332,7 @@ class LLMFunctionStrategy(IStrategy):
         **kwargs
     ) -> bool:
         """
-        平仓确认回调 - 生成交易复盘并存储到 RAG
+        平仓确认回调 - 生成交易复盘
         """
         try:
             # 获取持仓追踪数据
@@ -524,18 +528,11 @@ class LLMFunctionStrategy(IStrategy):
                 multi_timeframe_data=multi_tf_history
             )
 
-            # 获取历史交易上下文
-            historical_context = self.historical_context.get_recent_context(
-                pair=pair,
-                action_type="entry"
-            )
-
             # 构建决策请求
             decision_request = self.context_builder.build_decision_request(
                 action_type="entry",
                 market_context=market_context,
-                position_context="",  # 已包含在market_context中
-                historical_context=historical_context
+                position_context=""  # 已包含在market_context中
             )
 
             # 调用LLM决策（使用开仓提示词）
@@ -714,18 +711,11 @@ class LLMFunctionStrategy(IStrategy):
                 except Exception as e:
                     logger.debug(f"更新持仓追踪失败: {e}")
 
-            # 获取历史交易上下文
-            historical_context = self.historical_context.get_recent_context(
-                pair=pair,
-                action_type="exit"
-            )
-
             # 构建决策请求
             decision_request = self.context_builder.build_decision_request(
                 action_type="exit",
                 market_context=market_context,
-                position_context="",  # 已包含在market_context中
-                historical_context=historical_context
+                position_context=""  # 已包含在market_context中
             )
 
             # 调用LLM决策（使用持仓管理提示词）

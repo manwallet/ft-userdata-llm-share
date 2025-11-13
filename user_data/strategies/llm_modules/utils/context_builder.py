@@ -22,16 +22,23 @@ logger = logging.getLogger(__name__)
 class ContextBuilder:
     """LLM上下文构建器（门面类，协调各个模块）"""
 
-    def __init__(self, context_config: Dict[str, Any]):
+    def __init__(self, context_config: Dict[str, Any], historical_query_engine=None, pattern_analyzer=None):
         """
         初始化上下文构建器
 
         Args:
             context_config: 上下文配置
+            historical_query_engine: 历史查询引擎实例（可选）
+            pattern_analyzer: 模式分析器实例（可选）
         """
         self.config = context_config
         self.max_tokens = context_config.get("max_context_tokens", 6000)
         self.sentiment = MarketSentiment()  # 初始化市场情绪获取器
+
+        # 学习系统组件
+        self.historical_query = historical_query_engine
+        self.pattern_analyzer = pattern_analyzer
+        self.enable_learning = historical_query_engine is not None
 
         # 先初始化新的模块化组件（在使用它们之前）
         self.formatter = DataFormatter()
@@ -132,26 +139,68 @@ class ContextBuilder:
             try:
                 sentiment_data = self.sentiment.get_combined_sentiment(exchange, pair)
 
-                # Fear & Greed Index
+                # Fear & Greed Index - 显示完整历史
                 if sentiment_data.get('fear_greed'):
                     fg = sentiment_data['fear_greed']
-                    # 显示当前值
-                    sentiment_parts.append(f"  恐惧与贪婪: {fg['value']}/100 ({fg['classification']})")
-                    # 显示7天趋势
-                    if fg.get('history_7d'):
-                        history = fg['history_7d']
-                        trend_str = ' → '.join([str(v) for v in history])
-                        sentiment_parts.append(f"    7天趋势: {trend_str}")
+                    sentiment_parts.append(f"  恐惧与贪婪指数: {fg['value']}/100 ({fg['classification']})")
+
+                    # 显示30天完整历史（原始数据，不做处理）
+                    if fg.get('history_30d'):
+                        sentiment_parts.append("  ")
+                        sentiment_parts.append("  历史30天（原始数据）：")
+                        history = fg['history_30d']
+
+                        # 策略：显示最近3天每日 + 每周关键点
+                        # 最近3天
+                        for i, h in enumerate(history[:3]):
+                            if i == 0:
+                                time_desc = "今天"
+                            elif i == 1:
+                                time_desc = "昨天"
+                            else:
+                                time_desc = f"{i}天前"
+                            sentiment_parts.append(
+                                f"    {h['date']} ({time_desc}): {h['value']} ({h['classification']})"
+                            )
+
+                        # 每周关键点：第7天、第14天、第21天、第30天
+                        key_points = [7, 14, 21, 29]  # 索引从0开始，29=第30天
+                        for idx in key_points:
+                            if idx < len(history):
+                                h = history[idx]
+                                days_ago = idx
+                                sentiment_parts.append(
+                                    f"    {h['date']} ({days_ago}天前): {h['value']} ({h['classification']})"
+                                )
 
                 # Funding Rate
                 if sentiment_data.get('funding_rate'):
                     fr = sentiment_data['funding_rate']
-                    sentiment_parts.append(f"  资金费率: {fr['rate_pct']:.4f}%")
+                    sentiment_parts.append("  ")
+                    sentiment_parts.append(f"  资金费率: {fr['rate_pct']:.4f}% ({fr['interpretation']})")
 
-                # Long/Short Ratio
+                # Long/Short Ratio - 显示最近几天的趋势
                 if sentiment_data.get('long_short'):
                     ls = sentiment_data['long_short']
-                    sentiment_parts.append(f"  多空比: {ls['current_ratio']:.2f} ({ls['extreme_level']})")
+                    sentiment_parts.append("  ")
+                    sentiment_parts.append(f"  多空比: {ls['current_ratio']:.2f} (多{ls['long_pct']:.1f}% / 空{ls['short_pct']:.1f}%)")
+                    sentiment_parts.append(f"    状态: {ls['extreme_level']} | 趋势: {ls['trend']}")
+
+                    # 显示最近7天的多空比（每12小时一个点）
+                    if ls.get('history_30d'):
+                        history = ls['history_30d']
+                        # 取最近7天（168小时）的数据，每12小时一个点 = 14个点
+                        recent_7d = history[-168:]
+                        sampled = [recent_7d[i] for i in range(0, len(recent_7d), 12)][-14:]
+
+                        if sampled:
+                            sentiment_parts.append("    最近7天多空比变化（每12小时）：")
+                            for h in reversed(sampled):  # 从旧到新
+                                from datetime import datetime
+                                time_str = datetime.fromtimestamp(h['timestamp'] / 1000).strftime('%m-%d %H:00')
+                                sentiment_parts.append(
+                                    f"      {time_str}: {h['ratio']:.2f} (多{h['long_pct']:.0f}%/空{h['short_pct']:.0f}%)"
+                                )
 
             except Exception as e:
                 logger.error(f"获取市场情绪失败: {e}")
@@ -448,6 +497,39 @@ class ContextBuilder:
 
         # 在最后添加市场情绪参考（弱化显示）
         context_parts.extend(sentiment_parts)
+
+        # 添加历史经验和模式分析（自我学习系统）
+        if self.enable_learning:
+            try:
+                context_parts.append("")
+                # 获取最近交易
+                recent_trades_text = self.historical_query.format_recent_trades_for_context(
+                    pair=pair,
+                    limit=5
+                )
+                context_parts.append(recent_trades_text)
+
+                # 获取统计摘要
+                context_parts.append("")
+                summary_text = self.historical_query.format_pair_summary_for_context(
+                    pair=pair,
+                    days=30
+                )
+                context_parts.append(summary_text)
+
+                # 获取模式分析
+                if self.pattern_analyzer:
+                    recent_trades = self.historical_query.query_recent_trades(pair=pair, limit=50)
+                    if len(recent_trades) >= 5:
+                        context_parts.append("")
+                        patterns_text = self.pattern_analyzer.format_patterns_for_context(
+                            pair=pair,
+                            trades=recent_trades
+                        )
+                        context_parts.append(patterns_text)
+
+            except Exception as e:
+                logger.error(f"添加历史经验失败: {e}")
 
         context_parts.append("")
         context_parts.append("=" * 60)
@@ -1104,17 +1186,15 @@ class ContextBuilder:
         self,
         action_type: str,
         market_context: str,
-        position_context: str,
-        historical_context: str
+        position_context: str
     ) -> str:
         """
         构建决策请求
 
         Args:
             action_type: 决策类型 (entry/exit)
-            market_context: 市场上下文
+            market_context: 市场上下文（已包含历史经验）
             position_context: 持仓上下文
-            historical_context: 历史交易上下文
 
         Returns:
             完整的决策请求字符串
@@ -1132,9 +1212,6 @@ class ContextBuilder:
             "",
             "=" * 50,
             position_context,
-            "",
-            "=" * 50,
-            historical_context,
             "",
             "决策后调用一个函数，立即停止"
         ]
