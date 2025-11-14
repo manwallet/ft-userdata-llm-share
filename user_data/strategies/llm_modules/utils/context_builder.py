@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class ContextBuilder:
     """LLM上下文构建器（门面类，协调各个模块）"""
 
-    def __init__(self, context_config: Dict[str, Any], historical_query_engine=None, pattern_analyzer=None):
+    def __init__(self, context_config: Dict[str, Any], historical_query_engine=None, pattern_analyzer=None, tradable_balance_ratio=1.0, max_open_trades=1):
         """
         初始化上下文构建器
 
@@ -30,10 +30,14 @@ class ContextBuilder:
             context_config: 上下文配置
             historical_query_engine: 历史查询引擎实例（可选）
             pattern_analyzer: 模式分析器实例（可选）
+            tradable_balance_ratio: 可交易余额比例（如0.5表示只用50%资金）
+            max_open_trades: 最大持仓数量
         """
         self.config = context_config
         self.max_tokens = context_config.get("max_context_tokens", 6000)
         self.sentiment = MarketSentiment()  # 初始化市场情绪获取器
+        self.tradable_balance_ratio = tradable_balance_ratio
+        self.max_open_trades = max_open_trades
 
         # 学习系统组件
         self.historical_query = historical_query_engine
@@ -273,11 +277,18 @@ class ContextBuilder:
                 total = wallets.get_total('USDT')
                 free = wallets.get_free('USDT')
                 used = wallets.get_used('USDT')
+
+                # 计算实际可用交易余额（考虑tradable_balance_ratio和max_open_trades）
+                tradable_total = total * self.tradable_balance_ratio
+                tradable_free = tradable_total - used
+                per_trade_avg = tradable_total / self.max_open_trades if self.max_open_trades > 0 else tradable_total
+
                 context_parts.extend([
                     f"  总余额: {total:.2f} USDT",
-                    f"  可用余额: {free:.2f} USDT",
+                    f"  可交易余额: {tradable_total:.2f} USDT ({self.tradable_balance_ratio*100:.0f}%资金)",
+                    f"  当前可用: {tradable_free:.2f} USDT",
                     f"  已用资金: {used:.2f} USDT",
-                    f"  资金利用率: {(used/total*100):.1f}%" if total > 0 else "  资金利用率: 0%"
+                    f"  最多{self.max_open_trades}个仓位，平均每个约 {per_trade_avg:.2f} USDT"
                 ])
             except Exception as e:
                 context_parts.append(f"  无法获取账户信息: {e}")
