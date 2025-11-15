@@ -30,7 +30,10 @@ class HistoricalQueryEngine:
     def _load_trades(self):
         """从JSONL文件加载所有交易"""
         if not self.trade_log_path.exists():
-            logger.warning(f"交易日志文件不存在: {self.trade_log_path}")
+            # 创建目录和空文件
+            self.trade_log_path.parent.mkdir(parents=True, exist_ok=True)
+            self.trade_log_path.touch()
+            logger.info(f"交易日志文件不存在，已创建空文件: {self.trade_log_path}")
             self._cache = []
             return
 

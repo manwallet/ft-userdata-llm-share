@@ -278,10 +278,10 @@ class MarketSentiment:
                 return None
 
             # 解析数据：[{longShortRatio, longAccount, shortAccount, timestamp}, ...]
-            # 数据是按时间倒序的，最新的在前
+            # Binance API返回的数据是按时间正序的（旧->新），timestamp递增
             # 注意：longAccount和shortAccount是小数比例（如0.654代表65.4%），需要乘100
             history = []
-            for item in reversed(data):  # 反转成正序（旧->新）
+            for item in data:  # 直接使用正序数据（旧->新）
                 ratio = float(item.get('longShortRatio', 0))
                 if ratio > 0:
                     history.append({
